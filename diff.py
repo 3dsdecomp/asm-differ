@@ -53,6 +53,11 @@ if __name__ == "__main__":
         help="Function name or address to start diffing from.",
     )
 
+    my_start_argument = parser.add_argument(
+        "my_start",
+        help="Function name or address to start diffing from in myimg.",
+    )
+
     if argcomplete:
 
         def complete_symbol(
@@ -98,9 +103,12 @@ if __name__ == "__main__":
         setattr(start_argument, "completer", complete_symbol)
 
     parser.add_argument(
-        "end",
-        nargs="?",
-        help="Address to end diff at.",
+        "size",
+        help="Size of function to diff.",
+    )
+    parser.add_argument(
+        "my_size",
+        help="Size of decompiled function.",
     )
     parser.add_argument(
         "-o",
@@ -372,6 +380,7 @@ except ModuleNotFoundError as e:
 @dataclass
 class ProjectSettings:
     arch_str: str
+    arch_objdump_str: str
     objdump_executable: str
     objdump_flags: List[str]
     build_command: List[str]
@@ -436,6 +445,7 @@ class Config:
 def create_project_settings(settings: Dict[str, Any]) -> ProjectSettings:
     return ProjectSettings(
         arch_str=settings.get("arch", "mips"),
+        arch_objdump_str=settings.get("arch_objdump", "mips"),
         baseimg=settings.get("baseimg"),
         myimg=settings.get("myimg"),
         mapfile=settings.get("mapfile"),
@@ -1412,27 +1422,31 @@ def dump_objfile(
 
 
 def dump_binary(
-    start: str, end: Optional[str], config: Config, project: ProjectSettings
+    start: str, mystart: str, size: str, my_size: str, config: Config, project: ProjectSettings
 ) -> Tuple[str, ObjdumpCommand, ObjdumpCommand]:
     if not project.baseimg or not project.myimg:
         fail("Missing myimg/baseimg in config.")
     if config.make:
         run_make(project.myimg, project)
     start_addr = maybe_eval_int(start)
+    mystart_addr = maybe_eval_int(mystart)
     if start_addr is None:
         _, start_addr = search_map_file(start, project, config)
         if start_addr is None:
             fail("Not able to find function in map file.")
-    if end is not None:
-        end_addr = eval_int(end, "End address must be an integer expression.")
-    else:
-        end_addr = start_addr + config.max_function_size_bytes
-    objdump_flags = ["-Dz", "-bbinary"] + ["-EB" if config.arch.big_endian else "-EL"]
+    size_addr = 4
+    if size is not None:
+        size_addr = eval_int(size, "Function size must be a valid expression.")
+    my_size_addr = 4
+    if my_size is not None:
+        my_size_addr = eval_int(my_size, "Decompiled function size must be a valid expression.")
+    end_addr = start_addr + size_addr
+    objdump_flags = ["-Dz", "-bbinary", "-m", project.arch_objdump_str] + ["-EB" if config.arch.big_endian else "-EL"]
     flags1 = [
         f"--start-address={start_addr + config.base_shift}",
         f"--stop-address={end_addr + config.base_shift}",
     ]
-    flags2 = [f"--start-address={start_addr}", f"--stop-address={end_addr}"]
+    flags2 = [f"--start-address={mystart_addr}", f"--stop-address={mystart_addr+my_size_addr}"]
     return (
         project.myimg,
         (objdump_flags + flags1, project.baseimg, None),
@@ -3273,14 +3287,14 @@ def main() -> None:
 
     if args.diff_elf_symbol:
         make_target, basecmd, mycmd = dump_elf(
-            args.start, args.end, args.diff_elf_symbol, config, project
+            args.start, args.size, args.diff_elf_symbol, config, project
         )
     elif config.diff_obj:
         make_target, basecmd, mycmd = dump_objfile(
-            args.start, args.end, config, project
+            args.start, args.size, config, project
         )
     else:
-        make_target, basecmd, mycmd = dump_binary(args.start, args.end, config, project)
+        make_target, basecmd, mycmd = dump_binary(args.start, args.my_start, args.size, args.my_size, config, project)
 
     map_build_target_fn = getattr(diff_settings, "map_build_target", None)
     if map_build_target_fn:
